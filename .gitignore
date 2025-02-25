@@ -1,10 +1,12 @@
+*.7z
+
 pyinstaller_build_files/
 # Ignore unzipped test copies of releases.
 X4_Customizer_v*/
 # Ignore releases themselves.
 *.zip
 # Ignore scattered files generated for releases.
-*.bat
+# *.bat
 for_egosoft_forum.txt
 Default_Script.py
 # Ignore random screenshots taken.

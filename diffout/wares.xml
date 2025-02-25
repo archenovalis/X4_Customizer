@@ -1,0 +1,20 @@
+<?xml version='1.0' encoding='utf-8'?>
+<diff>
+  <add sel="/mdscript/cues/library/cues/cue/actions/set_value[@name='$WaitTime']" pos="before">
+    <debug_text text="'begin job_helper: '+ $Faction"/>
+  </add>
+  <add sel="/mdscript/cues/library/cues/cue/actions/set_value[@name='$WaitTime']" pos="before">
+    <show_notification text="'begin job_helper: '+ $Faction"/>
+  </add>
+  <add sel="/mdscript/cues/library/cues/cue/actions/set_value[@name='$WaitTime']" pos="before">
+    <do_if value="$Faction == faction.bankingclan">
+      <set_value name="$DebugChance" exact="100"/>
+      <debug_text text="'begin bankingclan job_helper'"/>
+    </do_if>
+  </add>
+  <add sel="/mdscript/cues/library/cues/cue/actions/set_value[@name='$WaitTime']" pos="before">
+    <do_else>
+      <set_value name="$DebugChance" exact="0"/>
+    </do_else>
+  </add>
+</diff>

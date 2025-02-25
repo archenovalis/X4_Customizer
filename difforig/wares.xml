@@ -1,0 +1,228 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mdscript name="Job_Helper" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+  <cues>
+
+    <library name="Manager" namespace="this">
+      <params>
+        <param name="FactionManagerCue"/>
+        <param name="Faction"/>
+        <param name="DebugChance" default="0"/>
+      </params>
+      <cues>
+        <cue name="Process_Ships">
+          <actions>
+            <set_value name="$WaitTime" min="20s" max="40s"/>
+            <set_value name="$Shipyards" exact="[]"/>
+
+            <!--Find waiting subordinate ships-->
+            <find_waiting_subordinate name="$ShipsToBuild" owner="$Faction" hasbuildingtask="false" multiple="true">
+              <match_parent negate="true" class="class.component" comment="Only interested in the disconnected ships"/>
+            </find_waiting_subordinate>
+            <debug_text text="$Faction.knownname + ' has ' + $ShipsToBuild.count + ' waiting subordinate ships'" chance="$DebugChance"/>
+
+            <!--Find lead job ships
+              note: previously, lead job ships had a lower chance of being selected than subordinates to help commanders waiting too long
+              it is now an even chance to give more opportunity to construct economic ships. Further selection preferences may be needed in extreme circumstances-->
+            <find_waiting_job_ship name="$ShipsToBuild" owner="$Faction" hasbuildingtask="false" multiple="true" append="true">
+              <match_parent negate="true" class="class.component" comment="Only interested in the disconnected ships"/>
+            </find_waiting_job_ship>
+            <debug_text text="$Faction.knownname + ' has ' + $ShipsToBuild.count + ' waiting ships'" chance="$DebugChance"/>
+
+            <do_if value="$ShipsToBuild.count">
+              <!--TODO @Owen should we be checking for the extension of the shipyard's sector-->
+              <!--TODO @Owen hasassignedcontrolentity-->
+              <find_station name="$Shipyards" canbuildships="true" canbuildfor="$Faction" hascontrolentity="controlpost.shiptrader" space="player.galaxy" multiple="true"/>
+              <debug_text text="$Faction.knownname + ' ' + player.age + ' Finding shipyards'" chance="$DebugChance"/>
+
+              <!--Build a table with details on the shipyard so we don't have to query it too often-->
+              <set_value name="$ShipyardTable" exact="table[]"/>
+              <do_all exact="$Shipyards.count" counter="$i" reverse="true">
+                <set_value name="$Shipyard" exact="$Shipyards.{$i}"/>
+
+                <!--Check if the shipyard can build any ship macros for this faction-->
+                <get_ship_build_wares object="$Shipyards.{$i}" result="$BuildableShipWares" otherfaction="$Faction" requireblueprints="true" canbuild="true"/>
+                <!--TODO @Owen use get_equipment_build_wares and check if the ship loadout is available at the shipyard-->
+                <do_if value="$BuildableShipWares.count">
+                  <debug_text text="$Shipyard.knownname + ' can build ' + $BuildableShipWares" chance="$DebugChance"/>
+                </do_if>
+                <do_else>
+                  <debug_text text="$Shipyard.knownname + ' can not build any ship macros for ' + $Faction" chance="$DebugChance"/>
+                  <remove_value name="$Shipyards.{$i}"/>
+                  <continue/>
+                </do_else>
+
+                <set_value name="$FreeBuildModuleTable" exact="table[]"/>
+                <!--TODO @Owen use freebuildprocessors?-->
+                <set_value name="$BuildModules" exact="$Shipyard.buildmodules"/>
+                <do_if value="$BuildModules.count">
+                  <set_value name="$QueuedBuilds" exact="$Shipyard.builds.queued"/>
+                  <!--The queued builds are used to check what non-busy processors could soon be assigned to. Remove any non-ship construction builds or those which already have an assigned processor but not yet started.-->
+                  <do_all exact="$QueuedBuilds.count" counter="$j" reverse="true">
+                    <do_if value="not $QueuedBuilds.{$j}.isshipbuild or ($QueuedBuilds.{$j}.buildobject.exists and $QueuedBuilds.{$j}.buildprocessor)">
+                      <remove_value name="$QueuedBuilds.{$j}"/>
+                    </do_if>
+                  </do_all>
+                  <do_all exact="$BuildModules.count" counter="$j">
+                    <find_object_component name="$FreeBuildProcessors" class="class.buildprocessor" busy="false" object="$BuildModules.{$j}" multiple="true"/>
+                    <do_if value="$FreeBuildProcessors.count">
+                      <!--Go over the queued ship construction builds and see if this build module can accomodate one. If so, remove a processor as it is 'reserved' for a queued build.-->
+                      <do_all exact="$QueuedBuilds.count" counter="$k" reverse="true">
+                        <assert value="not $QueuedBuilds.{$k}.buildobject or $QueuedBuilds.{$k}.buildobject.state == componentstate.operational" text="'Queued build has a buildobject which is not operational: ' + $QueuedBuilds.{$k}.buildobject + ' ' + $QueuedBuilds.{$k}.buildobject.knownname + ' state: ' + $QueuedBuilds.{$k}.buildobject.state + ' Parent: ' + $QueuedBuilds.{$k}.buildobject.parent + ' [Owen]'"/>
+                        <do_if value="($QueuedBuilds.{$k}.buildobject and $BuildModules.{$j}.dock.{$QueuedBuilds.{$k}.buildobject.docksize}) or ($QueuedBuilds.{$k}.macro and $BuildModules.{$j}.dock.{$QueuedBuilds.{$k}.macro.docksize})">
+                          <remove_value name="$FreeBuildProcessors.{1}"/>
+                        </do_if>
+                        <do_if value="$FreeBuildProcessors.count == 0">
+                          <break/>
+                        </do_if>
+                      </do_all>
+
+                      <do_if value="$FreeBuildProcessors.count">
+                        <set_value name="$FreeBuildModuleTable.{$BuildModules.{$j}}" operation="add" exact="$FreeBuildProcessors.count"/>
+                      </do_if>
+                    </do_if>
+                  </do_all>
+                </do_if>
+
+                <do_if value="$FreeBuildModuleTable.keys.count">
+                  <debug_text text="$Faction.knownname + ' Shipyard: ' + $Shipyards.{$i} + ' ' + $Shipyards.{$i}.knownname + ' in ' + $Shipyards.{$i}.sector.knownname + ' has build modules with free processors: ' + $FreeBuildModuleTable" chance="$DebugChance"/>
+                  <set_value name="$ShipyardTable.{$Shipyard}" exact="table[]"/>
+                  <set_value name="$ShipyardTable.{$Shipyard}.$FreeBuildModuleTable" exact="$FreeBuildModuleTable"/>
+                  <set_value name="$ShipyardTable.{$Shipyard}.$BuildableShipWares" exact="$BuildableShipWares"/>
+                </do_if>
+                <do_else>
+                  <debug_text text="$Faction.knownname + ' Ignoring shipyard: ' + $Shipyards.{$i} + ' ' + $Shipyards.{$i}.knownname + ' in ' + $Shipyards.{$i}.sector.knownname + ' as it does not have enough free build processors'" chance="$DebugChance"/>
+                  <remove_value name="$Shipyards.{$i}"/>
+                </do_else>
+              </do_all>
+
+              <remove_value name="$BuildProcessors"/>
+            </do_if>
+
+            <do_if value="$Shipyards.count">
+              <shuffle_list list="$ShipsToBuild"/>
+
+              <set_value name="$SelectedShips" exact="[]"/>
+              <set_value name="$ShipCostTable" exact="table[]"/>
+              <set_value name="$ShipyardPriceTables" exact="table[]"/>
+              <set_value name="$ShipyardDistanceTable" exact="table[]"/>
+
+              <set_value name="$JumpCheckRange" exact="4" comment="Maximum range where distance of shipyard is taken into account. Futher shipyards have the same distance score."/>
+              <do_all exact="$ShipsToBuild.count" counter="$i">
+                <do_if value="$Shipyards.count == 0">
+                  <break/>
+                </do_if>
+
+                <set_value name="$ShipToBuild" exact="$ShipsToBuild.{$i}"/>
+                <debug_text text="$Faction.knownname + ' wants to build ' + $ShipToBuild.macro" chance="$DebugChance"/>
+                <do_if value="$i gt 20">
+                  <!--Early out. We have concidered enough ships for this round.-->
+                  <break/>
+                </do_if>
+
+                <clear_table table="$ShipCostTable"/>
+                <clear_table table="$ShipyardDistanceTable"/>
+                <!--If the shipyard can build this ship, evaluate its suitability based on price and distance to job main zone-->
+                <!--TODO @Owen optimisation. Don't do all of this if there's only one shipyard-->
+                <do_all exact="$Shipyards.count" counter="$k">
+                  <set_value name="$Shipyard" exact="$Shipyards.{$k}"/>
+                  <do_if value="$ShipyardTable.{$Shipyard}.$BuildableShipWares.indexof.{$ShipToBuild.macro.ware}">
+                    <set_value name="$HasSuitableBuildModule" exact="false"/>
+                    <do_all exact="$ShipyardTable.{$Shipyard}.$FreeBuildModuleTable.keys.count" counter="$o">
+                      <!--Check if the build module with a free processor has a suitable dock for this ship (don't need to check if the dock is free yet)-->
+                      <do_if value="$ShipyardTable.{$Shipyard}.$FreeBuildModuleTable.keys.{$o}.dock.{$ShipToBuild.docksize}">
+                        <set_value name="$HasSuitableBuildModule" exact="true"/>
+                        <break/>
+                      </do_if>
+                    </do_all>
+                    <do_if value="$HasSuitableBuildModule">
+                      <do_if value="not $ShipyardPriceTables.{$Shipyard}?">
+                        <set_value name="$ShipyardPriceTables.{$Shipyard}" exact="$Shipyard.buildbuyprices"/>
+                      </do_if>
+                      <get_object_value result="$ShipValue" object="$ShipToBuild" pricetable="$ShipyardPriceTables.{$Shipyard}"/>
+                      <set_value name="$ShipCostTable.{$Shipyard}" exact="$ShipValue"/>
+                      <do_if value="not $ShipyardTable.{$Shipyard}.$DistanceTable?">
+                        <find_cluster_in_range distances="$ShipyardTable.{$Shipyard}.$DistanceTable" object="$Shipyard" maxdistance="$JumpCheckRange" multiple="true"/>
+                      </do_if>
+
+                      <set_value name="$JobCluster" exact="@$ShipToBuild.jobcommander.cluster"/>
+                      <do_if value="not $JobCluster">
+                        <set_value name="$JobCluster" exact="@$ShipToBuild.jobmainsector.cluster"/>
+                      </do_if>
+                      <do_if value="$JobCluster and $ShipyardTable.{$Shipyard}.$DistanceTable.{$JobCluster}? and $ShipyardTable.{$Shipyard}.$DistanceTable.{$JobCluster} ge 0">
+                        <set_value name="$ShipyardDistanceTable.{$Shipyard}" exact="$ShipyardTable.{$Shipyard}.$DistanceTable.{$JobCluster}"/>
+                      </do_if>
+                      <do_elseif value="$Shipyard.gatedistance.{$JobCluster} ge 0">
+                        <!--Shipyard is a bit far. Don't exclude it but treat as a low chance.-->
+                        <set_value name="$ShipyardDistanceTable.{$Shipyard}" exact="$JumpCheckRange + 1"/>
+                      </do_elseif>
+                      <!--Else: No path between the JobCluster and the shipyard. Disregard shipyard.-->
+                      <remove_value name="$JobCluster"/>
+                    </do_if>
+                    <remove_value name="$HasSuitableBuildModule"/>
+                  </do_if>
+                </do_all>
+
+                <!--Score the shipyards by how they rank in both price and range. Lower is better.-->
+                <!--Note: Shipyards of the same distance / price may always be in the same order. The random selection of shipyard below should at least mitigate this a bit.-->
+                <set_value name="$ScoredShipyardTable" exact="table[]"/>
+                <set_value name="$PriceOrder" exact="$ShipCostTable.keys.sorted"/>
+                <set_value name="$DistanceOrder" exact="$ShipyardDistanceTable.keys.sorted"/>
+                <do_all exact="$PriceOrder.count" counter="$k">
+                  <do_if value="$DistanceOrder.indexof.{$PriceOrder.{$k}}">
+                    <debug_text text="$Faction.knownname + ' - Shipyard: ' + $PriceOrder.{$k} + ' ' + $PriceOrder.{$k}.knownname + ' has price rank of ' + $k + ' distance rank of ' + $DistanceOrder.indexof.{$PriceOrder.{$k}}" chance="$DebugChance"/>
+                    <set_value name="$ScoredShipyardTable.{$PriceOrder.{$k}}" exact="$k + $DistanceOrder.indexof.{$PriceOrder.{$k}}"/>
+                  </do_if>
+                </do_all>
+
+                <do_if value="$ScoredShipyardTable.keys.count">
+                  <set_value name="$SelectedShipyardIndex" min="1" max="$ScoredShipyardTable.keys.count" profile="decreasing"/>
+                  <set_value name="$ScoreOrder" exact="$ScoredShipyardTable.keys.sorted"/>
+                  <set_value name="$Shipyard" exact="$ScoreOrder.{$SelectedShipyardIndex}"/>
+
+                  <add_build_to_construct_ship result="$Build" object="$Shipyard" buildobject="$ShipToBuild" faction="$Faction" price="if $Shipyard.isplayerowned then $ShipCostTable.{$Shipyard} else 0Cr"/>
+                  <debug_text text="$Faction.knownname + ' Added build order ' + $Build + ' for ship ' + $ShipToBuild.knownname + ' (' + $ShipToBuild + ') on shipyard: ' + $Shipyard + ' in ' + $Shipyard.sector.knownname" chance="$DebugChance"/>
+
+                  <!--if shipyard is selected, reduce the count of processors and disregard if they get too low.-->
+                  <set_value name="$SuitableBuildModule" exact="false"/>
+                  <do_all exact="$ShipyardTable.{$Shipyard}.$FreeBuildModuleTable.keys.count" counter="$o">
+                    <do_if value="$ShipyardTable.{$Shipyard}.$FreeBuildModuleTable.keys.{$o}.dock.{$ShipToBuild.docksize}">
+                      <set_value name="$SuitableBuildModule" exact="$ShipyardTable.{$Shipyard}.$FreeBuildModuleTable.keys.{$o}"/>
+                      <break/>
+                    </do_if>
+                  </do_all>
+                  <assert value="$SuitableBuildModule" text="'Could not find a suitable build module while it should be guaranteed [Owen]'"/>
+                  <do_if value="$SuitableBuildModule">
+                    <do_if value="$ShipyardTable.{$Shipyard}.$FreeBuildModuleTable.{$SuitableBuildModule} == 1">
+                      <remove_value name="$ShipyardTable.{$Shipyard}.$FreeBuildModuleTable.{$SuitableBuildModule}"/>
+                      <debug_text text="'No more free processors on module ' + $SuitableBuildModule + ' ' + $SuitableBuildModule.knownname + '. Note, the builds are not assigned to the processors yet.'" chance="$DebugChance"/>
+                    </do_if>
+                    <do_else>
+                      <set_value name="$ShipyardTable.{$Shipyard}.$FreeBuildModuleTable.{$SuitableBuildModule}" operation="subtract"/>
+                      <debug_text text="'Build module ' + $SuitableBuildModule + ' ' + $SuitableBuildModule.knownname + ' has ' + $ShipyardTable.{$Shipyard}.$FreeBuildModuleTable.{$SuitableBuildModule} + ' free processors left'" chance="$DebugChance"/>
+                    </do_else>
+                  </do_if>
+                  <remove_value name="$SuitableBuildModule"/>
+
+                  <do_if value="$ShipyardTable.{$Shipyard}.$FreeBuildModuleTable.keys.count == 0">
+                    <debug_text text="'Shipyard ' + $Shipyard + ' ' + $Shipyard.knownname + ' has no more build modules with free processors. Removing from potential shipyard list.'" chance="$DebugChance"/>
+                    <remove_from_list name="$Shipyards" exact="$Shipyard" multiple="false" />
+                  </do_if>
+                </do_if>
+              </do_all>
+            </do_if>
+            <remove_value name="$ShipyardTable"/>
+            <remove_value name="$Shipyards"/>
+          </actions>
+          <cues>
+            <cue name="Reset_Process_Ships">
+              <delay exact="$WaitTime"/>
+              <actions>
+                <reset_cue cue="Process_Ships"/>
+              </actions>
+            </cue>
+          </cues>
+        </cue>
+      </cues>
+    </library>
+  </cues>
+</mdscript>
